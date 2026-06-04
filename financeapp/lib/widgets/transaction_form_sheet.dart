@@ -1,32 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 import '../models/transaction_model.dart';
-import '../viewmodels/auth_viewmodel.dart';
-import '../viewmodels/finance_viewmodel.dart';
+import '../providers/finance_provider.dart';
 import '../app_theme.dart';
 import '../utils/currency_formatter.dart';
 
-class TransactionFormSheet extends StatefulWidget {
-  final TransactionModel? existing; // null = add, non-null = edit
+class TransactionFormSheet extends ConsumerStatefulWidget {
+  final TransactionModel? existing;
+  final String userId;
 
-  const TransactionFormSheet({super.key, this.existing});
+  const TransactionFormSheet({super.key, this.existing, required this.userId});
 
-  static Future<void> show(BuildContext context,
-      {TransactionModel? existing}) async {
+  static Future<void> show(BuildContext context, {required String userId, TransactionModel? existing}) async {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => TransactionFormSheet(existing: existing),
+      builder: (_) => TransactionFormSheet(existing: existing, userId: userId),
     );
   }
 
   @override
-  State<TransactionFormSheet> createState() => _TransactionFormSheetState();
+  ConsumerState<TransactionFormSheet> createState() => _TransactionFormSheetState();
 }
 
-class _TransactionFormSheetState extends State<TransactionFormSheet> {
+class _TransactionFormSheetState extends ConsumerState<TransactionFormSheet> {
   final _formKey = GlobalKey<FormState>();
   final _titleCtrl = TextEditingController();
   final _amountCtrl = TextEditingController();
@@ -69,8 +69,7 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
       lastDate: DateTime(2100),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme:
-              Theme.of(context).colorScheme.copyWith(primary: AppTheme.primary),
+          colorScheme: Theme.of(context).colorScheme.copyWith(primary: AppTheme.primary),
         ),
         child: child!,
       ),
@@ -81,25 +80,19 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
-    final rawAmount = _amountCtrl.text.replaceAll(',', '.');
-    final amount = double.tryParse(rawAmount);
+    final amount = double.tryParse(_amountCtrl.text.replaceAll(',', '.'));
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Valor inválido. Use o formato: 150,00')),
+        const SnackBar(content: Text('Valor inválido')),
       );
       return;
     }
 
     setState(() => _isLoading = true);
 
-    final financeVM = context.read<FinanceViewModel>();
-    final authVM = context.read<AuthViewModel>();
-    final userId = authVM.currentUser!.id;
-
     try {
       if (_isEditing) {
-        await financeVM.updateTransaction(
-          id: widget.existing!.id,
+        final updated = widget.existing!.copyWith(
           title: _titleCtrl.text,
           amount: amount,
           isIncome: _isIncome,
@@ -107,18 +100,11 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
           category: _selectedCategory,
           note: _noteCtrl.text.isEmpty ? null : _noteCtrl.text,
         );
-        if (mounted) {
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Transação atualizada!'),
-              backgroundColor: AppTheme.income,
-            ),
-          );
-        }
+        await ref.read(financeProvider(widget.userId).notifier).updateTransaction(updated);
       } else {
-        await financeVM.addTransaction(
-          userId: userId,
+        final tx = TransactionModel(
+          id: const Uuid().v4(),
+          userId: widget.userId,
           title: _titleCtrl.text,
           amount: amount,
           isIncome: _isIncome,
@@ -126,15 +112,17 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
           category: _selectedCategory,
           note: _noteCtrl.text.isEmpty ? null : _noteCtrl.text,
         );
-        if (mounted) {
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Transação adicionada!'),
-              backgroundColor: AppTheme.income,
-            ),
-          );
-        }
+        await ref.read(financeProvider(widget.userId).notifier).addTransaction(tx);
+      }
+
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_isEditing ? 'Transação atualizada!' : 'Transação adicionada!'),
+            backgroundColor: AppTheme.income,
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -158,11 +146,9 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Handle bar
               Center(
                 child: Container(
-                  width: 40,
-                  height: 4,
+                  width: 40, height: 4,
                   margin: const EdgeInsets.only(bottom: 20),
                   decoration: BoxDecoration(
                     color: const Color(0xFFE0E0E0),
@@ -170,18 +156,11 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
                   ),
                 ),
               ),
-
               Text(
                 _isEditing ? 'Editar Transação' : 'Nova Transação',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF212121),
-                ),
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 24),
-
-              // Income / Expense toggle
               Container(
                 decoration: BoxDecoration(
                   color: const Color(0xFFF5F5F5),
@@ -197,9 +176,7 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
                         selectedColor: AppTheme.income,
                         onTap: () => setState(() {
                           _isIncome = true;
-                          if (!_isEditing) {
-                            _selectedCategory = TransactionCategory.trabalho;
-                          }
+                          if (!_isEditing) _selectedCategory = TransactionCategory.trabalho;
                         }),
                       ),
                     ),
@@ -211,9 +188,7 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
                         selectedColor: AppTheme.expense,
                         onTap: () => setState(() {
                           _isIncome = false;
-                          if (!_isEditing) {
-                            _selectedCategory = TransactionCategory.alimentacao;
-                          }
+                          if (!_isEditing) _selectedCategory = TransactionCategory.alimentacao;
                         }),
                       ),
                     ),
@@ -221,8 +196,6 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
                 ),
               ),
               const SizedBox(height: 16),
-
-              // Title
               TextFormField(
                 controller: _titleCtrl,
                 decoration: const InputDecoration(
@@ -232,13 +205,10 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
                 textCapitalization: TextCapitalization.sentences,
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) return 'Informe o título';
-                  if (v.trim().length < 2) return 'Título muito curto';
                   return null;
                 },
               ),
               const SizedBox(height: 12),
-
-              // Amount
               TextFormField(
                 controller: _amountCtrl,
                 decoration: const InputDecoration(
@@ -246,28 +216,21 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
                   prefixIcon: Icon(Icons.attach_money_rounded),
                   hintText: '0,00',
                 ),
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[0-9,.]')),
-                ],
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9,.]'))],
                 validator: (v) {
                   if (v == null || v.isEmpty) return 'Informe o valor';
                   final parsed = double.tryParse(v.replaceAll(',', '.'));
-                  if (parsed == null) return 'Valor inválido';
-                  if (parsed <= 0) return 'Valor deve ser maior que zero';
+                  if (parsed == null || parsed <= 0) return 'Valor inválido';
                   return null;
                 },
               ),
               const SizedBox(height: 12),
-
-              // Date picker
               InkWell(
                 onTap: _pickDate,
                 borderRadius: BorderRadius.circular(12),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     border: Border.all(color: const Color(0xFFE0E0E0)),
@@ -275,23 +238,17 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.calendar_today_rounded,
-                          color: Color(0xFF757575), size: 20),
+                      const Icon(Icons.calendar_today_rounded, color: Color(0xFF757575), size: 20),
                       const SizedBox(width: 12),
-                      Text(
-                        CurrencyFormatter.formatDate(_selectedDate),
-                        style: const TextStyle(fontSize: 16),
-                      ),
+                      Text(CurrencyFormatter.formatDate(_selectedDate),
+                          style: const TextStyle(fontSize: 16)),
                       const Spacer(),
-                      const Icon(Icons.edit_calendar_rounded,
-                          color: AppTheme.primary, size: 18),
+                      const Icon(Icons.edit_calendar_rounded, color: AppTheme.primary, size: 18),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 12),
-
-              // Category
               DropdownButtonFormField<TransactionCategory>(
                 value: _selectedCategory,
                 decoration: const InputDecoration(
@@ -299,18 +256,11 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
                   prefixIcon: Icon(Icons.category_rounded),
                 ),
                 items: TransactionCategory.values.map((cat) {
-                  return DropdownMenuItem(
-                    value: cat,
-                    child: Text('${cat.emoji} ${cat.label}'),
-                  );
+                  return DropdownMenuItem(value: cat, child: Text('${cat.emoji} ${cat.label}'));
                 }).toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _selectedCategory = v);
-                },
+                onChanged: (v) { if (v != null) setState(() => _selectedCategory = v); },
               ),
               const SizedBox(height: 12),
-
-              // Note (optional)
               TextFormField(
                 controller: _noteCtrl,
                 decoration: const InputDecoration(
@@ -318,26 +268,16 @@ class _TransactionFormSheetState extends State<TransactionFormSheet> {
                   prefixIcon: Icon(Icons.notes_rounded),
                 ),
                 maxLines: 2,
-                textCapitalization: TextCapitalization.sentences,
               ),
               const SizedBox(height: 24),
-
-              // Submit button
               ElevatedButton(
                 onPressed: _isLoading ? null : _submit,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      _isIncome ? AppTheme.income : AppTheme.expense,
+                  backgroundColor: _isIncome ? AppTheme.income : AppTheme.expense,
                 ),
                 child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
+                    ? const SizedBox(height: 20, width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : Text(_isEditing ? 'Salvar Alterações' : 'Adicionar'),
               ),
             ],
@@ -356,11 +296,8 @@ class _TypeButton extends StatelessWidget {
   final VoidCallback onTap;
 
   const _TypeButton({
-    required this.label,
-    required this.icon,
-    required this.isSelected,
-    required this.selectedColor,
-    required this.onTap,
+    required this.label, required this.icon, required this.isSelected,
+    required this.selectedColor, required this.onTap,
   });
 
   @override
@@ -378,18 +315,12 @@ class _TypeButton extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon,
-                color: isSelected ? Colors.white : const Color(0xFF9E9E9E),
-                size: 18),
+            Icon(icon, color: isSelected ? Colors.white : const Color(0xFF9E9E9E), size: 18),
             const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : const Color(0xFF9E9E9E),
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-              ),
-            ),
+            Text(label, style: TextStyle(
+              color: isSelected ? Colors.white : const Color(0xFF9E9E9E),
+              fontWeight: FontWeight.w600, fontSize: 14,
+            )),
           ],
         ),
       ),

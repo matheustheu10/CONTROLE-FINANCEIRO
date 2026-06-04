@@ -1,20 +1,22 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../app_theme.dart';
 import '../../models/transaction_model.dart';
 import '../../utils/currency_formatter.dart';
-import '../../viewmodels/auth_viewmodel.dart';
-import '../../viewmodels/finance_viewmodel.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/finance_provider.dart';
+import '../../providers/news_provider.dart';
 import '../../widgets/transaction_form_sheet.dart';
 
-class DashboardView extends StatefulWidget {
+class DashboardView extends ConsumerStatefulWidget {
   const DashboardView({super.key});
 
   @override
-  State<DashboardView> createState() => _DashboardViewState();
+  ConsumerState<DashboardView> createState() => _DashboardViewState();
 }
 
-class _DashboardViewState extends State<DashboardView> {
+class _DashboardViewState extends ConsumerState<DashboardView> {
   final _searchCtrl = TextEditingController();
   bool _showSearch = false;
 
@@ -40,13 +42,11 @@ class _DashboardViewState extends State<DashboardView> {
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.expense,
               minimumSize: Size.zero,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
             ),
-            onPressed: () {
-              context.read<FinanceViewModel>().clearData();
-              context.read<AuthViewModel>().logout();
-              Navigator.pushReplacementNamed(context, '/auth');
+            onPressed: () async {
+              await ref.read(authNotifierProvider.notifier).logout();
+              if (mounted) Navigator.pushReplacementNamed(context, '/auth');
             },
             child: const Text('Sair'),
           ),
@@ -55,8 +55,7 @@ class _DashboardViewState extends State<DashboardView> {
     );
   }
 
-  Future<void> _confirmDelete(
-      BuildContext context, TransactionModel tx) async {
+  Future<void> _confirmDelete(BuildContext context, TransactionModel tx, String userId) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -72,8 +71,7 @@ class _DashboardViewState extends State<DashboardView> {
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.expense,
               minimumSize: Size.zero,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
             ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Excluir'),
@@ -83,18 +81,10 @@ class _DashboardViewState extends State<DashboardView> {
     );
 
     if (confirmed == true && mounted) {
-      await context.read<FinanceViewModel>().deleteTransaction(tx.id);
+      await ref.read(financeProvider(userId).notifier).deleteTransaction(tx.id);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Transação excluída'),
-            backgroundColor: AppTheme.expense,
-            action: SnackBarAction(
-              label: 'OK',
-              textColor: Colors.white,
-              onPressed: () {},
-            ),
-          ),
+          const SnackBar(content: Text('Transação excluída'), backgroundColor: AppTheme.expense),
         );
       }
     }
@@ -102,7 +92,9 @@ class _DashboardViewState extends State<DashboardView> {
 
   @override
   Widget build(BuildContext context) {
-    final user = context.read<AuthViewModel>().currentUser;
+    final user = FirebaseAuth.instance.currentUser;
+    final userId = user?.uid ?? '';
+    final financeState = ref.watch(financeProvider(userId));
 
     return Scaffold(
       backgroundColor: AppTheme.surface,
@@ -120,10 +112,9 @@ class _DashboardViewState extends State<DashboardView> {
                   filled: false,
                   contentPadding: EdgeInsets.zero,
                 ),
-                onChanged: (v) =>
-                    context.read<FinanceViewModel>().setSearchQuery(v),
+                onChanged: (v) => ref.read(financeProvider(userId).notifier).setSearch(v),
               )
-            : Text('Olá, ${user?.name.split(' ').first ?? 'usuário'} 👋'),
+            : Text('Olá, ${user?.displayName?.split(' ').first ?? 'usuário'} 👋'),
         actions: [
           IconButton(
             icon: Icon(_showSearch ? Icons.close : Icons.search_rounded),
@@ -131,111 +122,80 @@ class _DashboardViewState extends State<DashboardView> {
               setState(() => _showSearch = !_showSearch);
               if (!_showSearch) {
                 _searchCtrl.clear();
-                context.read<FinanceViewModel>().setSearchQuery('');
+                ref.read(financeProvider(userId).notifier).setSearch('');
               }
             },
           ),
           IconButton(
             icon: const Icon(Icons.bar_chart_rounded),
-            onPressed: () =>
-                Navigator.pushNamed(context, '/analysis'),
-            tooltip: 'Análise',
+            onPressed: () => Navigator.pushNamed(context, '/analysis'),
           ),
           IconButton(
             icon: const Icon(Icons.logout_rounded),
             onPressed: _logout,
-            tooltip: 'Sair',
           ),
         ],
       ),
-      body: Consumer<FinanceViewModel>(
-        builder: (_, vm, __) {
-          if (vm.isLoading) {
-            return const Center(
-                child: CircularProgressIndicator(color: AppTheme.primary));
-          }
-
-          return RefreshIndicator(
-            color: AppTheme.primary,
-            onRefresh: () async {
-              final userId =
-                  context.read<AuthViewModel>().currentUser!.id;
-              await vm.loadTransactions(userId);
-            },
-            child: CustomScrollView(
-              slivers: [
-                // ── Balance Cards ──
-                SliverToBoxAdapter(
-                  child: _BalanceSection(vm: vm),
-                ),
-
-                // ── Filter Chips ──
-                SliverToBoxAdapter(
-                  child: _FilterBar(vm: vm),
-                ),
-
-                // ── Section header ──
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Transações',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF212121),
-                          ),
-                        ),
-                        Text(
-                          '${vm.filteredTransactions.length} registro(s)',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF9E9E9E),
-                          ),
-                        ),
-                      ],
+      body: financeState.isLoading
+          ? _SkeletonLoader()
+          : RefreshIndicator(
+              color: AppTheme.primary,
+              onRefresh: () => ref.read(financeProvider(userId).notifier).loadTransactions(),
+              child: CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(child: _BalanceSection(state: financeState)),
+                  SliverToBoxAdapter(child: _FilterBar(userId: userId)),
+                  SliverToBoxAdapter(child: _NewsSection()),
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Transações',
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                          Text('${financeState.filtered.length} registro(s)',
+                              style: const TextStyle(fontSize: 13, color: Color(0xFF9E9E9E))),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-
-                // ── List ──
-                vm.filteredTransactions.isEmpty
-                    ? SliverFillRemaining(
-                        child: _EmptyState(
-                          isFiltered: vm.activeFilter != FilterType.all ||
-                              _showSearch,
+                  financeState.filtered.isEmpty
+                      ? SliverFillRemaining(
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.receipt_long_rounded, size: 64, color: Color(0xFFBDBDBD)),
+                                const SizedBox(height: 16),
+                                const Text('Nenhuma transação ainda',
+                                    style: TextStyle(fontSize: 16, color: Color(0xFF9E9E9E))),
+                                const SizedBox(height: 8),
+                                const Text('Toque em "Adicionar" para começar',
+                                    style: TextStyle(fontSize: 14, color: Color(0xFFBDBDBD))),
+                              ],
+                            ),
+                          ),
+                        )
+                      : SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (ctx, i) {
+                              final tx = financeState.filtered[i];
+                              return _TransactionTile(
+                                tx: tx,
+                                onEdit: () => TransactionFormSheet.show(ctx, userId: userId, existing: tx),
+                                onDelete: () => _confirmDelete(ctx, tx, userId),
+                              );
+                            },
+                            childCount: financeState.filtered.length,
+                          ),
                         ),
-                      )
-                    : SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (ctx, i) {
-                            final tx = vm.filteredTransactions[i];
-                            return _TransactionTile(
-                              tx: tx,
-                              onEdit: () =>
-                                  TransactionFormSheet.show(ctx,
-                                      existing: tx),
-                              onDelete: () => _confirmDelete(ctx, tx),
-                            );
-                          },
-                          childCount: vm.filteredTransactions.length,
-                        ),
-                      ),
-
-                const SliverToBoxAdapter(
-                  child: SizedBox(height: 100),
-                ),
-              ],
+                  const SliverToBoxAdapter(child: SizedBox(height: 100)),
+                ],
+              ),
             ),
-          );
-        },
-      ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => TransactionFormSheet.show(context),
+        onPressed: () => TransactionFormSheet.show(context, userId: userId),
         icon: const Icon(Icons.add_rounded),
         label: const Text('Adicionar'),
       ),
@@ -243,21 +203,177 @@ class _DashboardViewState extends State<DashboardView> {
   }
 }
 
-// ─── BALANCE SECTION ─────────────────────────────────────────────────────────
+// ─── SKELETON LOADER ─────────────────────────────────────────────────────────
 
-class _BalanceSection extends StatelessWidget {
-  final FinanceViewModel vm;
+class _SkeletonLoader extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          _SkeletonBox(height: 160, radius: 20),
+          const SizedBox(height: 16),
+          _SkeletonBox(height: 40, radius: 12),
+          const SizedBox(height: 16),
+          ...List.generate(4, (_) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _SkeletonBox(height: 72, radius: 16),
+          )),
+        ],
+      ),
+    );
+  }
+}
 
-  const _BalanceSection({required this.vm});
+class _SkeletonBox extends StatefulWidget {
+  final double height;
+  final double radius;
+  const _SkeletonBox({required this.height, required this.radius});
+
+  @override
+  State<_SkeletonBox> createState() => _SkeletonBoxState();
+}
+
+class _SkeletonBoxState extends State<_SkeletonBox> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..repeat(reverse: true);
+    _anim = Tween<double>(begin: 0.4, end: 1.0).animate(_ctrl);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final isPositive = vm.balance >= 0;
+    return FadeTransition(
+      opacity: _anim,
+      child: Container(
+        height: widget.height,
+        decoration: BoxDecoration(
+          color: const Color(0xFFE0E0E0),
+          borderRadius: BorderRadius.circular(widget.radius),
+        ),
+      ),
+    );
+  }
+}
 
+// ─── NEWS SECTION ─────────────────────────────────────────────────────────────
+
+class _NewsSection extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final news = ref.watch(newsProvider);
+
+    return news.when(
+      loading: () => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text('Notícias Financeiras',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            ),
+            _SkeletonBox(height: 80, radius: 12),
+          ],
+        ),
+      ),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (articles) {
+        if (articles.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Notícias Financeiras',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 120,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: articles.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 10),
+                  itemBuilder: (ctx, i) {
+                    final a = articles[i];
+                    return GestureDetector(
+                      onTap: () {},
+                      child: Container(
+                        width: 240,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              a.source,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppTheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              a.title,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: Color(0xFF212121),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ─── BALANCE SECTION ──────────────────────────────────────────────────────────
+
+class _BalanceSection extends StatelessWidget {
+  final FinanceState state;
+  const _BalanceSection({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [AppTheme.primaryDark, AppTheme.primary],
@@ -275,22 +391,15 @@ class _BalanceSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Saldo Atual',
-            style: TextStyle(
-              color: Color(0xFFA5D6A7),
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          const Text('Saldo Atual',
+              style: TextStyle(color: Color(0xFFA5D6A7), fontSize: 14, fontWeight: FontWeight.w500)),
           const SizedBox(height: 6),
           Text(
-            CurrencyFormatter.format(vm.balance),
+            CurrencyFormatter.format(state.balance),
             style: TextStyle(
-              color: isPositive ? Colors.white : const Color(0xFFFF8A80),
+              color: state.balance >= 0 ? Colors.white : const Color(0xFFFF8A80),
               fontSize: 32,
               fontWeight: FontWeight.w800,
-              letterSpacing: -0.5,
             ),
           ),
           const SizedBox(height: 20),
@@ -299,7 +408,7 @@ class _BalanceSection extends StatelessWidget {
               Expanded(
                 child: _MiniCard(
                   label: 'Receitas',
-                  value: vm.totalIncome,
+                  value: state.totalIncome,
                   icon: Icons.arrow_upward_rounded,
                   color: const Color(0xFF81C784),
                 ),
@@ -308,7 +417,7 @@ class _BalanceSection extends StatelessWidget {
               Expanded(
                 child: _MiniCard(
                   label: 'Despesas',
-                  value: vm.totalExpense,
+                  value: state.totalExpense,
                   icon: Icons.arrow_downward_rounded,
                   color: const Color(0xFFFF8A80),
                 ),
@@ -327,12 +436,7 @@ class _MiniCard extends StatelessWidget {
   final IconData icon;
   final Color color;
 
-  const _MiniCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
+  const _MiniCard({required this.label, required this.value, required this.icon, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -346,10 +450,7 @@ class _MiniCard extends StatelessWidget {
         children: [
           Container(
             padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.2),
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: color.withOpacity(0.2), shape: BoxShape.circle),
             child: Icon(icon, color: color, size: 16),
           ),
           const SizedBox(width: 8),
@@ -357,23 +458,10 @@ class _MiniCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                Text(
-                  CurrencyFormatter.format(value),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w500)),
+                Text(CurrencyFormatter.format(value),
+                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+                    overflow: TextOverflow.ellipsis),
               ],
             ),
           ),
@@ -383,38 +471,29 @@ class _MiniCard extends StatelessWidget {
   }
 }
 
-// ─── FILTER BAR ──────────────────────────────────────────────────────────────
+// ─── FILTER BAR ───────────────────────────────────────────────────────────────
 
-class _FilterBar extends StatelessWidget {
-  final FinanceViewModel vm;
-
-  const _FilterBar({required this.vm});
+class _FilterBar extends ConsumerWidget {
+  final String userId;
+  const _FilterBar({required this.userId});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filter = ref.watch(financeProvider(userId)).filter;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
-          _Chip(
-            label: 'Todos',
-            isSelected: vm.activeFilter == FilterType.all,
-            onTap: () => vm.setFilter(FilterType.all),
-          ),
+          _Chip(label: 'Todos', isSelected: filter == FilterType.all,
+              onTap: () => ref.read(financeProvider(userId).notifier).setFilter(FilterType.all)),
           const SizedBox(width: 8),
-          _Chip(
-            label: 'Receitas',
-            isSelected: vm.activeFilter == FilterType.income,
-            selectedColor: AppTheme.income,
-            onTap: () => vm.setFilter(FilterType.income),
-          ),
+          _Chip(label: 'Receitas', isSelected: filter == FilterType.income,
+              selectedColor: AppTheme.income,
+              onTap: () => ref.read(financeProvider(userId).notifier).setFilter(FilterType.income)),
           const SizedBox(width: 8),
-          _Chip(
-            label: 'Despesas',
-            isSelected: vm.activeFilter == FilterType.expense,
-            selectedColor: AppTheme.expense,
-            onTap: () => vm.setFilter(FilterType.expense),
-          ),
+          _Chip(label: 'Despesas', isSelected: filter == FilterType.expense,
+              selectedColor: AppTheme.expense,
+              onTap: () => ref.read(financeProvider(userId).notifier).setFilter(FilterType.expense)),
         ],
       ),
     );
@@ -427,12 +506,7 @@ class _Chip extends StatelessWidget {
   final Color selectedColor;
   final VoidCallback onTap;
 
-  const _Chip({
-    required this.label,
-    required this.isSelected,
-    this.selectedColor = AppTheme.primary,
-    required this.onTap,
-  });
+  const _Chip({required this.label, required this.isSelected, this.selectedColor = AppTheme.primary, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -440,50 +514,31 @@ class _Chip extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected ? selectedColor : Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isSelected ? selectedColor : const Color(0xFFE0E0E0),
-          ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: selectedColor.withOpacity(0.25),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3),
-                  )
-                ]
-              : [],
+          border: Border.all(color: isSelected ? selectedColor : const Color(0xFFE0E0E0)),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? Colors.white : const Color(0xFF757575),
-            fontWeight:
-                isSelected ? FontWeight.w600 : FontWeight.w400,
-            fontSize: 13,
-          ),
-        ),
+        child: Text(label,
+            style: TextStyle(
+              color: isSelected ? Colors.white : const Color(0xFF757575),
+              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+              fontSize: 13,
+            )),
       ),
     );
   }
 }
 
-// ─── TRANSACTION TILE ────────────────────────────────────────────────────────
+// ─── TRANSACTION TILE ─────────────────────────────────────────────────────────
 
 class _TransactionTile extends StatelessWidget {
   final TransactionModel tx;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
 
-  const _TransactionTile({
-    required this.tx,
-    required this.onEdit,
-    required this.onDelete,
-  });
+  const _TransactionTile({required this.tx, required this.onEdit, required this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -494,24 +549,16 @@ class _TransactionTile extends StatelessWidget {
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        decoration: BoxDecoration(
-          color: AppTheme.expense,
-          borderRadius: BorderRadius.circular(16),
-        ),
+        decoration: BoxDecoration(color: AppTheme.expense, borderRadius: BorderRadius.circular(16)),
         child: const Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.delete_rounded, color: Colors.white),
-            SizedBox(height: 2),
-            Text('Excluir',
-                style: TextStyle(color: Colors.white, fontSize: 11)),
+            Text('Excluir', style: TextStyle(color: Colors.white, fontSize: 11)),
           ],
         ),
       ),
-      confirmDismiss: (_) async {
-        onDelete();
-        return false; // deletion handled manually via dialog
-      },
+      confirmDismiss: (_) async { onDelete(); return false; },
       child: Card(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         child: InkWell(
@@ -521,146 +568,37 @@ class _TransactionTile extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
               children: [
-                // Category icon
                 Container(
-                  width: 44,
-                  height: 44,
+                  width: 44, height: 44,
                   decoration: BoxDecoration(
-                    color: tx.isIncome
-                        ? AppTheme.incomeLight
-                        : AppTheme.expenseLight,
+                    color: tx.isIncome ? AppTheme.incomeLight : AppTheme.expenseLight,
                     shape: BoxShape.circle,
                   ),
-                  child: Center(
-                    child: Text(
-                      tx.category.emoji,
-                      style: const TextStyle(fontSize: 20),
-                    ),
-                  ),
+                  child: Center(child: Text(tx.category.emoji, style: const TextStyle(fontSize: 20))),
                 ),
                 const SizedBox(width: 12),
-
-                // Title & date
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        tx.title,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF212121),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${tx.category.label} · ${CurrencyFormatter.formatDate(tx.date)}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF9E9E9E),
-                        ),
-                      ),
-                      if (tx.note != null && tx.note!.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          tx.note!,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFFBDBDBD),
-                            fontStyle: FontStyle.italic,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
+                      Text(tx.title,
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                      Text('${tx.category.label} · ${CurrencyFormatter.formatDate(tx.date)}',
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF9E9E9E))),
                     ],
                   ),
                 ),
-
-                // Amount + actions
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      '${tx.isIncome ? '+' : '-'} ${CurrencyFormatter.format(tx.amount)}',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color:
-                            tx.isIncome ? AppTheme.income : AppTheme.expense,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        GestureDetector(
-                          onTap: onEdit,
-                          child: const Icon(Icons.edit_rounded,
-                              size: 16, color: Color(0xFFBDBDBD)),
-                        ),
-                        const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: onDelete,
-                          child: const Icon(Icons.delete_outline_rounded,
-                              size: 16, color: Color(0xFFBDBDBD)),
-                        ),
-                      ],
-                    ),
-                  ],
+                Text(
+                  '${tx.isIncome ? '+' : '-'} ${CurrencyFormatter.format(tx.amount)}',
+                  style: TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w700,
+                    color: tx.isIncome ? AppTheme.income : AppTheme.expense,
+                  ),
                 ),
               ],
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ─── EMPTY STATE ─────────────────────────────────────────────────────────────
-
-class _EmptyState extends StatelessWidget {
-  final bool isFiltered;
-
-  const _EmptyState({required this.isFiltered});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            isFiltered
-                ? Icons.search_off_rounded
-                : Icons.receipt_long_rounded,
-            size: 64,
-            color: const Color(0xFFBDBDBD),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            isFiltered
-                ? 'Nenhum resultado encontrado'
-                : 'Nenhuma transação ainda',
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF9E9E9E),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            isFiltered
-                ? 'Tente outro filtro ou busca'
-                : 'Toque em "Adicionar" para começar',
-            style: const TextStyle(
-              fontSize: 14,
-              color: Color(0xFFBDBDBD),
-            ),
-          ),
-        ],
       ),
     );
   }
