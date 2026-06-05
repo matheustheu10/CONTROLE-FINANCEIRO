@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="Aplicativo de Controle Financeiro">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="FinanceApp">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <title>FinanceApp</title>
+
+  <!-- Firebase -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    const firebaseConfig = {
+      apiKey: "AIzaSyA5Knmn0PhsrM0mcxV9p7BxlIdiH0CG0-E",
+      authDomain: "financeapp-b0a10.firebaseapp.com",
+      projectId: "financeapp-b0a10",
+      storageBucket: "financeapp-b0a10.firebasestorage.app",
+      messagingSenderId: "433992021327",
+      appId: "1:433992021327:web:1c0ba50f9f5c12bc31013a"
+    };
+    window.firebaseApp = initializeApp(firebaseConfig);
+  </script>
+</head>
+<body>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
